@@ -3,9 +3,9 @@ import pandas as pd
 import pytest
 
 
-def _run(app, df, date_col, target_col, periods=7):
-    granularity = app.infer_granularity(df[date_col])
-    return granularity, app.build_time_series_model(
+def _run(core, df, date_col, target_col, periods=7):
+    granularity = core.infer_granularity(df[date_col])
+    return granularity, core.build_time_series_model(
         df=df,
         date_col=date_col,
         target_col=target_col,
@@ -15,21 +15,21 @@ def _run(app, df, date_col, target_col, periods=7):
 
 
 class TestGranularity:
-    def test_日次データを日次と判定する(self, app, orders_df):
-        assert app.infer_granularity(orders_df["日付"]) == "daily"
+    def test_日次データを日次と判定する(self, core, orders_df):
+        assert core.infer_granularity(orders_df["日付"]) == "daily"
 
-    def test_週次データを週次と判定する(self, app, weekly_df):
-        assert app.infer_granularity(weekly_df["date"]) == "weekly"
+    def test_週次データを週次と判定する(self, core, weekly_df):
+        assert core.infer_granularity(weekly_df["date"]) == "weekly"
 
-    def test_月次データを月次と判定する(self, app, monthly_df):
-        assert app.infer_granularity(monthly_df["date"]) == "monthly"
+    def test_月次データを月次と判定する(self, core, monthly_df):
+        assert core.infer_granularity(monthly_df["date"]) == "monthly"
 
 
 class TestTimeSeriesModel:
     @pytest.fixture(scope="class")
     @staticmethod
-    def result(app, orders_df):
-        return _run(app, orders_df, "日付", "受注件数")[1]
+    def result(core, orders_df):
+        return _run(core, orders_df, "日付", "受注件数")[1]
 
     def test_指定した期間数だけ未来を予測する(self, result):
         assert len(result["future_df"]) == 7
@@ -51,41 +51,41 @@ class TestTimeSeriesModel:
 class TestBaselineComparison:
     """このアプリの要。AIと単純な方法を必ず比較し、負けたら負けたと出せること。"""
 
-    def test_構造のあるデータではAIが単純な方法に勝つ(self, app, orders_df):
-        bm = _run(app, orders_df, "日付", "受注件数")[1]["baseline_metrics"]
+    def test_構造のあるデータではAIが単純な方法に勝つ(self, core, orders_df):
+        bm = _run(core, orders_df, "日付", "受注件数")[1]["baseline_metrics"]
         assert bm["model_mape"] < bm["mean_mape"]
         assert bm["model_mape"] < bm["naive_mape"]
 
-    def test_ベースライン指標が3種類そろう(self, app, orders_df):
-        bm = _run(app, orders_df, "日付", "受注件数")[1]["baseline_metrics"]
+    def test_ベースライン指標が3種類そろう(self, core, orders_df):
+        bm = _run(core, orders_df, "日付", "受注件数")[1]["baseline_metrics"]
         assert {"model_mape", "mean_mape", "naive_mape"} <= set(bm)
 
-    def test_AIが勝っていれば負け判定にならない(self, app, orders_df):
-        bm = _run(app, orders_df, "日付", "受注件数")[1]["baseline_metrics"]
-        assert app.is_ai_lost(bm) is False
+    def test_AIが勝っていれば負け判定にならない(self, core, orders_df):
+        bm = _run(core, orders_df, "日付", "受注件数")[1]["baseline_metrics"]
+        assert core.is_ai_lost(bm) is False
 
-    def test_AIが負けていれば負け判定になる(self, app):
-        assert app.is_ai_lost({"model_mape": 30.0, "mean_mape": 20.0, "naive_mape": 25.0}) is True
+    def test_AIが負けていれば負け判定になる(self, core):
+        assert core.is_ai_lost({"model_mape": 30.0, "mean_mape": 20.0, "naive_mape": 25.0}) is True
 
-    def test_比較できないデータでは負け判定にしない(self, app):
-        assert app.is_ai_lost({"model_mape": None, "mean_mape": None, "naive_mape": None}) is False
-        assert app.is_ai_lost(None) is False
+    def test_比較できないデータでは負け判定にしない(self, core):
+        assert core.is_ai_lost({"model_mape": None, "mean_mape": None, "naive_mape": None}) is False
+        assert core.is_ai_lost(None) is False
 
 
 class TestDataDiagnosis:
-    def test_良質なデータには成功メッセージを返す(self, app, orders_df):
-        ts = app.aggregate_timeseries(orders_df, "日付", "受注件数", "daily")
-        levels = [m["level"] for m in app.diagnose_time_series_data(ts, "日付", "受注件数", "daily")]
+    def test_良質なデータには成功メッセージを返す(self, core, orders_df):
+        ts = core.aggregate_timeseries(orders_df, "日付", "受注件数", "daily")
+        levels = [m["level"] for m in core.diagnose_time_series_data(ts, "日付", "受注件数", "daily")]
         assert "success" in levels
 
-    def test_件数不足のデータには警告を返す(self, app, small_df):
-        ts = app.aggregate_timeseries(small_df, "日付", "売上", "daily")
-        levels = [m["level"] for m in app.diagnose_time_series_data(ts, "日付", "売上", "daily")]
+    def test_件数不足のデータには警告を返す(self, core, small_df):
+        ts = core.aggregate_timeseries(small_df, "日付", "売上", "daily")
+        levels = [m["level"] for m in core.diagnose_time_series_data(ts, "日付", "売上", "daily")]
         assert "warning" in levels or "error" in levels
 
-    def test_件数不足では学習を中断する(self, app, small_df):
+    def test_件数不足では学習を中断する(self, core, small_df):
         with pytest.raises(ValueError, match="行以上"):
-            app.build_time_series_model(
+            core.build_time_series_model(
                 df=small_df, date_col="日付", target_col="売上",
                 granularity="daily", forecast_periods=7,
             )
@@ -94,13 +94,13 @@ class TestDataDiagnosis:
 class TestSmallData:
     """小規模データでも解釈できること(min_child_samples調整の回帰テスト)。"""
 
-    def test_月次データでも手がかりの効き具合が出る(self, app, monthly_df):
-        result = _run(app, monthly_df, "date", "sales")[1]
+    def test_月次データでも手がかりの効き具合が出る(self, core, monthly_df):
+        result = _run(core, monthly_df, "date", "sales")[1]
         assert result["importance_df"]["重要度"].sum() > 0, (
             "月次のような小規模データで重要度が全ゼロになると、画面が壊れて見える"
         )
 
-    def test_週次データでも予測できる(self, app, weekly_df):
-        result = _run(app, weekly_df, "date", "sales")[1]
+    def test_週次データでも予測できる(self, core, weekly_df):
+        result = _run(core, weekly_df, "date", "sales")[1]
         assert len(result["future_df"]) == 7
         assert result["mape"] is not None

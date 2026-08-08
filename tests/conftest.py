@@ -1,8 +1,8 @@
 """テスト共通の準備。
 
-app.py は「画面を描くコード」と「計算するコード」が同じファイルにあるため、
-そのまま import すると Streamlit の描画が走ってしまう。
-ここで Streamlit をダミーに差し替えてから読み込み、計算部分だけをテストする。
+計算部分は core.py にまとまっているため、そのまま import して検証できる。
+`app` フィクスチャは画面(app.py)側の関数も見たいとき用で、Streamlit を
+ダミーに差し替えてから読み込む。
 """
 import importlib.util
 import sys
@@ -72,7 +72,17 @@ def _load_app():
 
 
 @pytest.fixture(scope="session")
+def core():
+    """計算部分。Streamlit に依存しないので普通に import できる。"""
+    sys.path.insert(0, str(ROOT))
+    import core as core_module
+
+    return core_module
+
+
+@pytest.fixture(scope="session")
 def app():
+    """画面側。Streamlit をダミー化して読み込む。"""
     return _load_app()
 
 
