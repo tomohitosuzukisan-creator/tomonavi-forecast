@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 仮想環境
+.venv/
+venv/
+
+# 作業用バックアップ(公開しない)
+*.orig_backup
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# エディタ
+.vscode/
+.idea/
+
+# ユーザーがローカルで試したデータ(誤ってコミットしないため)
+private_data/
+*_private.csv
+
+# スモークテストが生成する一時ファイル
+sample_data/_tmp_*.csv
+
+# ChatGPTからの引き継ぎ資料(作業用・公開リポジトリには含めない)
+HANDOFF_from_chatgpt.md

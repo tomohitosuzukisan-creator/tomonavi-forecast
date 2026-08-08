@@ -1,0 +1,9 @@
+# ローカル(Python 3.14 / Windows)で動作確認済みのバージョン。
+# Streamlit Community Cloud でのインストールに失敗する場合は、
+# まず == を >= に緩めるか、該当行のバージョン指定を外して試すこと。
+streamlit==1.61.1
+pandas==3.0.5
+numpy==2.5.1
+matplotlib==3.11.1
+lightgbm==4.7.0
+scikit-learn==1.9.0
