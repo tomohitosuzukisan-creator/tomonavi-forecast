@@ -64,18 +64,26 @@ GRANULARITY_CONFIG = {
         "freq": "D",
         "feature_cols": ["lag1", "lag7", "rolling_mean_7", "dayofweek", "month"],
         "min_rows": 20,
+        # 予測値と比較する「直近の実績」をとる期間。
+        # 1点だけだと曜日変動に、7日だと月末の駆け込みに振り回されるため、4週で均す
+        "recent_window": 28,
+        "recent_label": "直近4週の平均",
     },
     "weekly": {
         "display": "週次",
         "freq": "W-MON",
         "feature_cols": ["lag1", "lag4", "rolling_mean_4", "weekofyear", "month"],
         "min_rows": 16,
+        "recent_window": 4,
+        "recent_label": "直近4週の平均",
     },
     "monthly": {
         "display": "月次",
         "freq": "MS",
         "feature_cols": ["lag1", "lag3", "lag12", "rolling_mean_3", "month", "quarter"],
         "min_rows": 18,
+        "recent_window": 3,
+        "recent_label": "直近3か月の平均",
     },
 }
 
@@ -533,23 +541,23 @@ def generate_forecast_summary(latest_actual: float, future_df: pd.DataFrame) -> 
 
     if change_ratio >= 0.20:
         trend = "大きく増加"
-        trend_message = "直近実績より大きく上回る見通しです。需要や件数が強く増える可能性があります。"
+        trend_message = "直近の平均を大きく上回る見通しです。需要や件数が強く増える可能性があります。"
         trend_level = "success"
     elif change_ratio >= 0.10:
         trend = "増加傾向"
-        trend_message = "直近実績より高めの見通しです。需要や件数が増える可能性があります。"
+        trend_message = "直近の平均より高めの見通しです。需要や件数が増える可能性があります。"
         trend_level = "info"
     elif change_ratio <= -0.20:
         trend = "大きく減少"
-        trend_message = "直近実績より大きく下回る見通しです。需要や件数が強く減る可能性があります。"
+        trend_message = "直近の平均を大きく下回る見通しです。需要や件数が強く減る可能性があります。"
         trend_level = "error"
     elif change_ratio <= -0.10:
         trend = "減少傾向"
-        trend_message = "直近実績より低めの見通しです。需要や件数が減る可能性があります。"
+        trend_message = "直近の平均より低めの見通しです。需要や件数が減る可能性があります。"
         trend_level = "warning"
     else:
         trend = "横ばい"
-        trend_message = "直近実績に近い水準で推移する可能性があります。"
+        trend_message = "直近の平均に近い水準で推移する可能性があります。"
         trend_level = "info"
 
     volatility_ratio = std_value / abs(avg_value) if avg_value != 0 else 0.0
@@ -655,7 +663,9 @@ def explain_feature_importance(importance_df: pd.DataFrame) -> list[str]:
     messages.append("※この解釈は統計的な傾向に基づく参考情報であり、因果関係を示すものではありません。")
     return messages
 
-def generate_comment(latest_actual: float, future_mean: float) -> str:
+def generate_comment(
+    latest_actual: float, future_mean: float, recent_label: str = "直近実績"
+) -> str:
     """直近実績と予測平均を比べた補足コメントを返す。
 
     設計方針として、断定や具体的な業務アクション(発注を増やす等)の指示は行わない。
@@ -663,7 +673,8 @@ def generate_comment(latest_actual: float, future_mean: float) -> str:
     """
     if latest_actual == 0:
         return (
-            f"直近実績が0のため増減率での比較ができません。予測期間の平均は {future_mean:,.1f} です。"
+            f"{recent_label}が0のため増減率での比較ができません。"
+            f"予測期間の平均は {future_mean:,.1f} です。"
             "実績に休業日や欠測が混ざっていないか確認してください。"
         )
 
@@ -671,17 +682,17 @@ def generate_comment(latest_actual: float, future_mean: float) -> str:
 
     if change_ratio >= 10:
         direction = (
-            f"直近実績 {latest_actual:,.1f} に対して、予測期間の平均は {future_mean:,.1f}"
+            f"{recent_label} {latest_actual:,.1f} に対して、予測期間の平均は {future_mean:,.1f}"
             f"(約 {change_ratio:+.1f}%)と高めの水準です。"
         )
     elif change_ratio <= -10:
         direction = (
-            f"直近実績 {latest_actual:,.1f} に対して、予測期間の平均は {future_mean:,.1f}"
+            f"{recent_label} {latest_actual:,.1f} に対して、予測期間の平均は {future_mean:,.1f}"
             f"(約 {change_ratio:+.1f}%)と低めの水準です。"
         )
     else:
         direction = (
-            f"直近実績 {latest_actual:,.1f} に対して、予測期間の平均は {future_mean:,.1f}"
+            f"{recent_label} {latest_actual:,.1f} に対して、予測期間の平均は {future_mean:,.1f}"
             f"(約 {change_ratio:+.1f}%)とほぼ同水準です。"
         )
 
@@ -693,7 +704,12 @@ def generate_comment(latest_actual: float, future_mean: float) -> str:
     )
 
 
-def render_forecast_summary(summary: dict, target_col: str, importance_df: pd.DataFrame | None = None) -> None:
+def render_forecast_summary(
+    summary: dict,
+    target_col: str,
+    importance_df: pd.DataFrame | None = None,
+    recent_label: str = "直近実績",
+) -> None:
     """今後の見通しサマリーをUIに表示する。"""
     st.subheader("今後の見通しサマリー")
     st.caption("業種や用途を限定せず、予測結果を判断材料として整理しています。")
@@ -701,7 +717,7 @@ def render_forecast_summary(summary: dict, target_col: str, importance_df: pd.Da
     c1, c2, c3 = st.columns(3)
     c1.metric("トレンド", summary["trend"])
     c2.metric("安定性", summary["stability"])
-    c3.metric("直近実績との差", f"{summary['change_ratio'] * 100:+.1f}%")
+    c3.metric(f"{recent_label}との差", f"{summary['change_ratio'] * 100:+.1f}%")
 
     c4, c5, c6 = st.columns(3)
     c4.metric(f"予測平均（{target_col}）", f"{summary['avg_value']:,.1f}")
@@ -1094,9 +1110,16 @@ if mode == "時系列予測":
             plt.tight_layout()
             st.pyplot(fig3)
 
-            latest_actual = float(result["ts_df"][target_col].iloc[-1])
+            # 最終1点と比べると曜日変動に振り回されるため、直近1周期の平均を基準にする
+            recent_cfg = GRANULARITY_CONFIG[detected_granularity]
+            recent_window = recent_cfg["recent_window"]
+            recent_label = recent_cfg["recent_label"]
+            latest_actual = float(result["ts_df"][target_col].tail(recent_window).mean())
+
             forecast_summary = generate_forecast_summary(latest_actual, result["future_df"])
-            render_forecast_summary(forecast_summary, target_col, result["importance_df"])
+            render_forecast_summary(
+                forecast_summary, target_col, result["importance_df"], recent_label
+            )
 
             st.subheader("未来予測")
             future_df = result["future_df"].copy()
@@ -1116,7 +1139,7 @@ if mode == "時系列予測":
 
             future_mean = float(result["future_df"]["予測値"].mean())
             st.subheader("補足コメント")
-            st.success(generate_comment(latest_actual, future_mean))
+            st.success(generate_comment(latest_actual, future_mean, recent_label))
 
             export_df = result["future_df"].copy()
             export_df = export_df.rename(columns={date_col: "日付", "予測値": f"{target_col}_予測値"})

@@ -120,11 +120,17 @@ def run_pipeline(csv_path: Path, date_col: str, target_col: str, label: str):
     check(f"{label}: 特徴量重要度", True, f"→ 合計 {imp_total}")
 
     # 致命バグだった generate_comment が実際に動くか
-    latest = float(result["ts_df"][target_col].iloc[-1])
+    # 比較基準はアプリ本体と同じく「直近1周期の平均」にそろえる
+    cfg = app.GRANULARITY_CONFIG[granularity]
+    latest = float(result["ts_df"][target_col].tail(cfg["recent_window"]).mean())
     fmean = float(result["future_df"]["予測値"].mean())
-    comment = app.generate_comment(latest, fmean)
+    comment = app.generate_comment(latest, fmean, cfg["recent_label"])
     check(f"{label}: generate_comment", isinstance(comment, str) and len(comment) > 10,
-          f"→ {comment[:40]}...")
+          f"→ {comment[:44]}...")
+
+    # 基準が最終1点だった頃は、曜日変動だけで「大きく減少」と誤警告していた
+    ratio = (fmean - latest) / latest if latest else 0.0
+    check(f"{label}: 増減率が過大でない", abs(ratio) < 0.20, f"→ {ratio * 100:+.1f}%")
 
     # CSVダウンロード用の変換(バグでここまで到達できていなかった)
     export = result["future_df"].copy()
@@ -140,8 +146,19 @@ print("=" * 60)
 
 print(f"\n日本語フォント: {app.ACTIVE_JP_FONT or '見つかりません(グラフが豆腐になります)'}")
 
-run_pipeline(ROOT / "sample_data/sample_demand_daily_180.csv", "date", "sales", "日次180日")
-run_pipeline(ROOT / "sample_data/sample_full.csv", "date", "sales", "30行(データ不足)")
+r_orders = run_pipeline(ROOT / "sample_data/sample_orders_daily.csv", "日付", "受注件数", "受注546日")
+run_pipeline(ROOT / "sample_data/sample_small_25rows.csv", "日付", "売上", "25行(データ不足)")
+
+# サンプルデータの性格が意図どおりかを確認する
+print("\n[サンプルデータの性格チェック]")
+if r_orders is not None:
+    bm = r_orders["baseline_metrics"]
+    check("受注データ: AIが単純平均に勝つ", bm["model_mape"] < bm["mean_mape"],
+          f"→ AI {bm['model_mape']:.1f}% < 平均 {bm['mean_mape']:.1f}%")
+    check("受注データ: AIが直前値に勝つ", bm["model_mape"] < bm["naive_mape"],
+          f"→ AI {bm['model_mape']:.1f}% < 直前値 {bm['naive_mape']:.1f}%")
+    check("受注データ: 特徴量重要度が出る", r_orders["importance_df"]["重要度"].sum() > 0)
+
 
 # 週次・月次データを合成して検証(引き継ぎ資料で「検証不足」とされていた部分)
 import numpy as np  # noqa: E402
