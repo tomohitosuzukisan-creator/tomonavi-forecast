@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import lightgbm as lgb
 import matplotlib.pyplot as plt
@@ -48,6 +49,9 @@ st.set_page_config(page_title="需要予測アプリ", layout="wide")
 MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_ROWS = 5000
 MAX_COLS = 20
+
+# アプリ内から1クリックで試せるサンプルデータ(ある会社の日次受注件数を模した合成データ)
+SAMPLE_CSV_PATH = Path(__file__).parent / "sample_data" / "sample_orders_daily.csv"
 MAX_FORECAST_PERIODS = 14
 CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
 
@@ -127,7 +131,7 @@ def diagnose_time_series_data(
         messages.append({
             "level": "warning",
             "title": "データ件数が少なめです",
-            "message": "予測は実行できますが、件数が少ないため精度や特徴量重要度が安定しない可能性があります。",
+            "message": "予測は実行できますが、件数が少ないため精度や手がかりの分析が安定しない可能性があります。",
         })
 
     unique_count = target.nunique()
@@ -135,7 +139,7 @@ def diagnose_time_series_data(
         messages.append({
             "level": "warning",
             "title": "目的変数の変動が少ないです",
-            "message": "同じような値が多いため、AIが需要変動のパターンを学習しにくい状態です。特徴量重要度が0になる場合があります。",
+            "message": "同じような値が多いため、AIが需要変動のパターンを学習しにくい状態です。手がかりの効き具合が読み取れない場合があります。",
         })
 
     std_value = float(target.std()) if row_count >= 2 else 0.0
@@ -146,7 +150,7 @@ def diagnose_time_series_data(
         messages.append({
             "level": "warning",
             "title": "目的変数がほぼ一定です",
-            "message": "売上や客数がほぼ同じ値で並んでいるため、予測モデルが分岐を作れず、特徴量の影響を判定できません。",
+            "message": "売上や客数がほぼ同じ値で並んでいるため、予測モデルがパターンを見つけられず、手がかりの影響を判定できません。",
         })
     elif cv < 0.03:
         messages.append({
@@ -184,7 +188,7 @@ def diagnose_time_series_data(
         messages.append({
             "level": "success",
             "title": "データ品質は概ね良好です",
-            "message": "件数・変動ともに大きな問題は見られません。予測結果と特徴量重要度を確認してください。",
+            "message": "件数・変動ともに大きな問題は見られません。予測結果を確認してください。",
         })
 
     return messages
@@ -192,6 +196,8 @@ def diagnose_time_series_data(
 
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
+if "use_sample" not in st.session_state:
+    st.session_state["use_sample"] = False
 
 
 def show_user_error(message: str) -> None:
@@ -438,7 +444,7 @@ def render_accuracy_summary(
             )
         else:
             st.error(
-                f"過去データ上では、平均して±{mape:.1f}%程度のズレでした。データ件数・特徴量・外れ値などを見直すことをおすすめします。"
+                f"過去データ上では、平均して±{mape:.1f}%程度のズレでした。データの期間・記録のされ方・外れ値などを見直すことをおすすめします。"
             )
 
     if future_df is not None and mape is not None and "予測値" in future_df.columns:
@@ -467,7 +473,7 @@ def render_accuracy_summary(
             elif mean_improvement >= -5:
                 st.warning("AIモデルは、単純平均予測とほぼ同程度です。AIを使うメリットは限定的な可能性があります。")
             else:
-                st.error(f"AIモデルは、単純平均予測より誤差が大きくなっています。データや特徴量の見直しをおすすめします。")
+                st.error(f"AIモデルは、単純平均予測より誤差が大きくなっています。このデータでは単純な方法のほうが有利です。")
 
         if naive_improvement is not None:
             if naive_improvement > 5:
@@ -475,7 +481,7 @@ def render_accuracy_summary(
             elif naive_improvement >= -5:
                 st.warning("AIモデルは、直前値をそのまま使う予測とほぼ同程度です。単純な方法でも十分な可能性があります。")
             else:
-                st.error(f"AIモデルは、直前値をそのまま使う予測より誤差が大きくなっています。データや特徴量の見直しをおすすめします。")
+                st.error(f"AIモデルは、直前値をそのまま使う予測より誤差が大きくなっています。このデータでは単純な方法のほうが有利です。")
 
         st.caption("※業務で使えるかどうかは、最終的には許容できるズレ幅、欠品・廃棄・機会損失などの影響額と比較して判断してください。")
 
@@ -494,17 +500,98 @@ def render_data_diagnosis(messages: list[dict]) -> None:
             st.info(text)
 
 
-def render_consultation_cta() -> None:
-    """予測結果の後に、30分無料相談への導線を表示する。"""
+def render_consultation_cta(ai_lost: bool = False) -> None:
+    """予測結果の後に、30分無料相談への導線を表示する。
+
+    ai_lost: AIが単純な方法に負けた場合はTrue。悪い結果を「原因を一緒に見る理由」に変換する。
+    """
     st.divider()
-    st.subheader("この結果、どう使えばいいか迷ったら")
-    st.markdown(
-        "予測は出せても「業務のどこに置くか」「この誤差は許容できるか」の判断は、"
-        "データと会社の実情を知る人にしか下せません。\n\n"
-        "中小製造業のAI活用・需要予測を専門にしている中小企業診断士が、"
-        "30分無料でオンライン相談を承っています。"
-    )
+    if ai_lost:
+        st.subheader("「予測しにくいデータ」には、必ず理由があります")
+        st.markdown(
+            "今回は、単純な方法のほうが当たる結果でした。実は、ここからが本題です。\n\n"
+            "欠測や休業日の混ざり方、イレギュラーの多さ、記録のされ方——予測しにくさの原因は"
+            "データごとに違います。その原因を突き止める作業こそ、30分無料相談でいちばんよく扱うテーマです。"
+            "中小製造業のAI活用・需要予測を専門にしている中小企業診断士が、オンラインでお話を伺います。"
+        )
+    else:
+        st.subheader("この結果、どう使えばいいか迷ったら")
+        st.markdown(
+            "予測は出せても「業務のどこに置くか」「この誤差は許容できるか」の判断は、"
+            "データと会社の実情を知る人にしか下せません。\n\n"
+            "中小製造業のAI活用・需要予測を専門にしている中小企業診断士が、"
+            "30分無料でオンライン相談を承っています。"
+        )
     st.link_button("30分無料相談を申し込む", "https://tomonavi.com/#contact")
+
+
+def is_ai_lost(baseline_metrics: dict | None) -> bool:
+    """AIが単純な方法(平均・直前値)のどちらかに負けたかどうか。判定不能ならFalse。"""
+    bm = baseline_metrics or {}
+    model_mape = bm.get("model_mape")
+    mean_mape = bm.get("mean_mape")
+    naive_mape = bm.get("naive_mape")
+    if model_mape is None or mean_mape is None or naive_mape is None:
+        return False
+    return model_mape >= min(mean_mape, naive_mape)
+
+
+def render_verdict(
+    baseline_metrics: dict | None,
+    future_df: pd.DataFrame | None,
+    latest_actual: float,
+    recent_label: str,
+) -> None:
+    """結論ファースト: このデータをAIで予測する価値があるかを、最初に一言で示す。"""
+    st.subheader("結論")
+
+    outlook = ""
+    if (
+        future_df is not None
+        and not future_df.empty
+        and "予測値" in future_df.columns
+        and latest_actual
+    ):
+        future_mean = float(future_df["予測値"].mean())
+        ratio = (future_mean - latest_actual) / latest_actual * 100
+        outlook = (
+            f"この先の平均は {future_mean:,.1f}"
+            f"（{recent_label} {latest_actual:,.1f} に対して {ratio:+.1f}%）の見通しです。"
+        )
+
+    bm = baseline_metrics or {}
+    model_mape = bm.get("model_mape")
+    mean_mape = bm.get("mean_mape")
+    naive_mape = bm.get("naive_mape")
+
+    if model_mape is None or mean_mape is None or naive_mape is None:
+        st.info("単純な方法との精度比較ができないデータのため、AIの優劣は判定できませんでした。" + outlook)
+        return
+
+    best_simple = min(mean_mape, naive_mape)
+    best_simple_name = "単純平均" if mean_mape <= naive_mape else "直前値"
+
+    if model_mape < best_simple * 0.95:
+        st.success(
+            f"**このデータは、AIで予測する価値があります。** "
+            f"AIの誤差は平均 ±{model_mape:.1f}% で、単純な方法"
+            f"（単純平均 ±{mean_mape:.1f}%・直前値 ±{naive_mape:.1f}%）より小さくなりました。"
+            + outlook
+        )
+    elif model_mape <= best_simple * 1.05:
+        st.info(
+            f"**AIと単純な方法は、ほぼ互角でした。** "
+            f"AIの誤差 ±{model_mape:.1f}% に対し、{best_simple_name}でも ±{best_simple:.1f}%。"
+            "このデータなら、まず単純な方法から始めるのも十分な選択です。"
+            + outlook
+        )
+    else:
+        st.warning(
+            f"**このデータでは、単純な方法のほうが当たっています。** "
+            f"AIの誤差 ±{model_mape:.1f}% に対し、{best_simple_name}をそのまま使うほうが"
+            f" ±{best_simple:.1f}% と小さい結果でした。無理にAIを使わない、も正しい判断です。"
+            + outlook
+        )
 
 
 def render_importance_diagnosis(importance_df: pd.DataFrame) -> None:
@@ -514,12 +601,10 @@ def render_importance_diagnosis(importance_df: pd.DataFrame) -> None:
 
     total_importance = importance_df["重要度"].sum()
     if total_importance == 0:
-        st.warning(
-            "特徴量重要度がすべて0です。これはバグとは限らず、データ件数が少ない、目的変数の変動が小さい、"
-            "または特徴量から需要の違いを十分に説明できない場合に起こります。"
-        )
         st.info(
-            "改善のヒント：期間を長くする、曜日・天候・イベント・価格・販促有無など、需要が変わる理由になりそうな列を追加すると改善しやすくなります。"
+            "今回のデータでは、どの手がかりが効いたかの内訳までは読み取れませんでした（予測そのものはできています）。"
+            "データ件数が少ない場合や、数値の変動が小さい場合に起こります。"
+            "期間を長くしたCSVで試すと、読み取れるようになることがあります。"
         )
 
 
@@ -953,6 +1038,7 @@ col1, col2 = st.columns([3, 1])
 with col2:
     if st.button("最初からやり直す"):
         st.session_state["uploader_key"] += 1
+        st.session_state["use_sample"] = False
         st.rerun()
 
 st.info(
@@ -972,17 +1058,33 @@ uploaded_file = st.file_uploader(
 )
 
 
-if uploaded_file is None:
-    st.info("まずはCSVファイルをアップロードしてください。")
+if uploaded_file is None and not st.session_state["use_sample"]:
+    st.info("まずはCSVファイルをアップロードしてください。手元にデータがなくても、下のボタンからサンプルで試せます。")
+    if st.button("サンプルデータで試す（ある会社の日次受注件数・1年半分）", type="primary"):
+        st.session_state["use_sample"] = True
+        st.rerun()
     st.stop()
 
 
-try:
-    validate_uploaded_file(uploaded_file)
-    df = read_csv_with_fallbacks(uploaded_file)
-except Exception as exc:
-    show_user_error(str(exc))
-    st.stop()
+if uploaded_file is not None:
+    # 実データがアップロードされたら、サンプル表示より優先する
+    st.session_state["use_sample"] = False
+    try:
+        validate_uploaded_file(uploaded_file)
+        df = read_csv_with_fallbacks(uploaded_file)
+    except Exception as exc:
+        show_user_error(str(exc))
+        st.stop()
+else:
+    try:
+        df = pd.read_csv(SAMPLE_CSV_PATH, encoding="utf-8-sig")
+    except Exception:
+        show_user_error("サンプルデータの読み込みに失敗しました。CSVをアップロードしてお試しください。")
+        st.stop()
+    st.success(
+        "サンプルデータ（ある会社の日次受注件数・546日分の合成データ）を読み込みました。"
+        "そのまま下の「予測する」ボタンまで進めます。自社のCSVをアップロードすると置き換わります。"
+    )
 
 
 if df.empty:
@@ -1013,7 +1115,7 @@ with setting_col1:
 
 remaining_target_columns = [col for col in all_columns if col != date_col]
 with setting_col2:
-    target_col = st.selectbox("目的変数列を選択", remaining_target_columns)
+    target_col = st.selectbox("予測したい数量の列を選択", remaining_target_columns)
 
 with setting_col3:
     granularity_label = st.selectbox(
@@ -1057,8 +1159,8 @@ if mode == "時系列予測":
         st.subheader("データの確認")
         c1, c2, c3 = st.columns(3)
         c1.metric("行数", f"{len(df_time):,}")
-        c2.metric("目的変数合計", f"{df_time[target_col].sum():,.2f}")
-        c3.metric("目的変数平均", f"{df_time[target_col].mean():,.2f}")
+        c2.metric("合計", f"{df_time[target_col].sum():,.2f}")
+        c3.metric("平均", f"{df_time[target_col].mean():,.2f}")
 
         preview_df = aggregate_timeseries(df_time, date_col, target_col, detected_granularity)
         st.dataframe(preview_df.head(20), use_container_width=True)
@@ -1089,6 +1191,16 @@ if mode == "時系列予測":
                 forecast_periods=forecast_periods,
             )
 
+            # 結論ファースト: 最初に「AIで予測する価値があるか」を一言で示す。
+            # 比較基準は最終1点でなく直近1周期の平均(曜日・月末変動に振り回されないため)
+            recent_cfg = GRANULARITY_CONFIG[detected_granularity]
+            recent_window = recent_cfg["recent_window"]
+            recent_label = recent_cfg["recent_label"]
+            latest_actual = float(result["ts_df"][target_col].tail(recent_window).mean())
+            render_verdict(
+                result["baseline_metrics"], result["future_df"], latest_actual, recent_label
+            )
+
             render_accuracy_summary(
                 result["mae"],
                 result["rmse"],
@@ -1111,23 +1223,20 @@ if mode == "時系列予測":
             plt.tight_layout()
             st.pyplot(fig2)
 
-            st.subheader("特徴量の重要度")
-            st.dataframe(result["importance_df"], use_container_width=True)
-            render_importance_diagnosis(result["importance_df"])
+            st.subheader("どの手がかりが効いているか")
+            if float(result["importance_df"]["重要度"].sum()) == 0:
+                render_importance_diagnosis(result["importance_df"])
+            else:
+                display_importance = result["importance_df"].rename(columns={"特徴量": "手がかり"})
+                st.dataframe(display_importance, use_container_width=True)
 
-            fig3, ax3 = plt.subplots(figsize=(8, 4))
-            ax3.bar(result["importance_df"]["特徴量"], result["importance_df"]["重要度"])
-            ax3.set_ylabel("重要度")
-            ax3.set_title("特徴量重要度")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            st.pyplot(fig3)
-
-            # 最終1点と比べると曜日変動に振り回されるため、直近1周期の平均を基準にする
-            recent_cfg = GRANULARITY_CONFIG[detected_granularity]
-            recent_window = recent_cfg["recent_window"]
-            recent_label = recent_cfg["recent_label"]
-            latest_actual = float(result["ts_df"][target_col].tail(recent_window).mean())
+                fig3, ax3 = plt.subplots(figsize=(8, 4))
+                ax3.bar(display_importance["手がかり"], display_importance["重要度"])
+                ax3.set_ylabel("重要度")
+                ax3.set_title("手がかりの効き具合")
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                st.pyplot(fig3)
 
             forecast_summary = generate_forecast_summary(latest_actual, result["future_df"])
             render_forecast_summary(
@@ -1164,14 +1273,14 @@ if mode == "時系列予測":
                 mime="text/csv",
             )
 
-            render_consultation_cta()
+            render_consultation_cta(ai_lost=is_ai_lost(result["baseline_metrics"]))
 
     except Exception as exc:
         show_user_error(f"予測処理で問題が発生しました。{exc}")
 
 else:
     st.subheader("追加特徴量で予測")
-    st.caption("日付以外の列を特徴量として使い、学習データの中で予測精度を確認します。")
+    st.caption("日付以外の列を手がかりとして使い、過去データの中で予測の精度と、どの手がかりが効いているかを確認します。")
 
     try:
         result = build_additional_feature_model(df, date_col, target_col)
@@ -1200,16 +1309,19 @@ else:
     plt.tight_layout()
     st.pyplot(fig5)
 
-    st.subheader("特徴量の重要度")
-    st.dataframe(result["importance_df"], use_container_width=True)
-    render_importance_diagnosis(result["importance_df"])
+    st.subheader("どの手がかりが効いているか")
+    if float(result["importance_df"]["重要度"].sum()) == 0:
+        render_importance_diagnosis(result["importance_df"])
+    else:
+        display_importance = result["importance_df"].rename(columns={"特徴量": "手がかり"})
+        st.dataframe(display_importance, use_container_width=True)
 
-    fig6, ax6 = plt.subplots(figsize=(8, 4))
-    ax6.bar(result["importance_df"]["特徴量"], result["importance_df"]["重要度"])
-    ax6.set_ylabel("重要度")
-    ax6.set_title("特徴量重要度")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    st.pyplot(fig6)
+        fig6, ax6 = plt.subplots(figsize=(8, 4))
+        ax6.bar(display_importance["手がかり"], display_importance["重要度"])
+        ax6.set_ylabel("重要度")
+        ax6.set_title("手がかりの効き具合")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        st.pyplot(fig6)
 
-    render_consultation_cta()
+    render_consultation_cta(ai_lost=is_ai_lost(result["baseline_metrics"]))
