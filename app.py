@@ -1450,6 +1450,19 @@ else:
         st.stop()
 
     st.subheader("どの手がかりが効いているか")
+
+    # 注意つきの列をあえて含めた場合は、結果側でも読み方の注意を出す。
+    # 例: 通し番号は時間の並びを丸暗記する道具になるため、重要度1位に見えても業務的な意味はない
+    flagged_selected = [
+        diag["col"] for diag in feature_diagnoses if diag["note"] and diag["col"] in selected_features
+    ]
+    if flagged_selected:
+        st.warning(
+            f"⚠️ 注意つきの列（{'、'.join(flagged_selected)}）を手がかりに含めています。"
+            "通し番号のような列は、行の並び（＝時間）を丸暗記する道具になるため重要度が高く出やすいですが、"
+            "未来のデータでは役に立たず、業務で使える要因でもありません。"
+            "外した場合の結果と見比べてみてください。"
+        )
     if float(result["importance_df"]["重要度"].sum()) == 0:
         render_importance_diagnosis(result["importance_df"])
     else:
