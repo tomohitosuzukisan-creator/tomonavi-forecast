@@ -159,11 +159,22 @@ if r_orders is not None:
           f"→ AI {bm['model_mape']:.1f}% < 直前値 {bm['naive_mape']:.1f}%")
     check("受注データ: 特徴量重要度が出る", r_orders["importance_df"]["重要度"].sum() > 0)
 
-# お弁当サンプル(追加特徴量モード用)の検証
-print("\n[お弁当データ(追加特徴量モード)]")
+# お弁当サンプル(要因分析モード用)の検証
+print("\n[お弁当データ(要因分析モード)]")
 bento_df = pd.read_csv(ROOT / "sample_data/sample_bento_daily.csv", encoding="utf-8-sig")
 check("お弁当: 手がかり列がある", len(bento_df.columns) >= 4, f"→ {list(bento_df.columns)}")
-bres = app.build_additional_feature_model(bento_df, "日付", "販売数")
+
+# 列診断: 通し番号がID疑いで既定OFFになるか
+diags = app.diagnose_feature_columns(bento_df, "日付", "販売数")
+id_diag = next((d for d in diags if d["col"] == "注文伝票No"), None)
+check("お弁当: 通し番号がID疑いで既定OFF", id_diag is not None and not id_diag["default_on"],
+      f"→ {id_diag['note'][:24]}…" if id_diag and id_diag["note"] else "")
+normal_cols = [d["col"] for d in diags if d["default_on"]]
+check("お弁当: 通常の手がかりは既定ON", "メニュー" in normal_cols and "天気" in normal_cols,
+      f"→ ON: {normal_cols}")
+
+# UIと同じく、既定ONの列だけでモデルを実行
+bres = app.build_additional_feature_model(bento_df, "日付", "販売数", normal_cols)
 check("お弁当: MAPE算出", bres["mape"] is not None,
       f"→ {bres['mape']:.1f}%" if bres["mape"] is not None else "")
 check("お弁当: 手がかりの効き具合が出る", bres["importance_df"]["重要度"].sum() > 0,
@@ -171,6 +182,17 @@ check("お弁当: 手がかりの効き具合が出る", bres["importance_df"]["
 bbm = bres["baseline_metrics"]
 check("お弁当: AIが単純平均に勝つ", bbm["model_mape"] < bbm["mean_mape"],
       f"→ AI {bbm['model_mape']:.1f}% < 平均 {bbm['mean_mape']:.1f}%")
+
+# 日付ソートの検証: シャッフルしたCSVでも同じ結果になる(C-3)
+shuffled = bento_df.sample(frac=1.0, random_state=7).reset_index(drop=True)
+bres2 = app.build_additional_feature_model(shuffled, "日付", "販売数", normal_cols)
+check("お弁当: 行順をシャッフルしても結果が同じ(日付ソート)",
+      abs(bres["mape"] - bres2["mape"]) < 1e-9,
+      f"→ {bres['mape']:.3f}% == {bres2['mape']:.3f}%")
+
+# 解釈文の検証(C-6)
+lines = app.explain_generic_importance(bres["importance_df"], "販売数")
+check("お弁当: 解釈文が生成される", len(lines) > 0, f"→ {lines[0][:30]}…" if lines else "")
 
 
 # 週次・月次データを合成して検証(引き継ぎ資料で「検証不足」とされていた部分)

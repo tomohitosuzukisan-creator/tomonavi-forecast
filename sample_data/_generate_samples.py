@@ -103,6 +103,8 @@ for d in bento_days:
         "気温": temp,
         "イベント": event,
         "価格": menu_price[menu] + int(rng.integers(-1, 2)) * 10,  # ほぼメニュー連動+日々の端数
+        # わざと入れた通し番号。アプリの列診断が「ID疑い」として自動で外す様子のデモになる
+        "注文伝票No": 10000 + len(bento_rows),
     })
 
 bento = pd.DataFrame(bento_rows)

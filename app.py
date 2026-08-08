@@ -49,6 +49,8 @@ st.set_page_config(page_title="需要予測アプリ", layout="wide")
 MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_ROWS = 5000
 MAX_COLS = 20
+# 要因分析で一度に使える手がかりの数。多すぎると「どれが効いているか」が読み取れなくなる
+MAX_FEATURE_COLS = 10
 
 # アプリ内から1クリックで試せるサンプルデータ(いずれも合成データ)
 _SAMPLE_DIR = Path(__file__).parent / "sample_data"
@@ -981,25 +983,103 @@ def build_time_series_model(
     }
 
 
-def build_additional_feature_model(df: pd.DataFrame, date_col: str, target_col: str):
-    candidate_features = [col for col in df.columns if col not in [date_col, target_col]]
-    if len(candidate_features) == 0:
-        raise ValueError("追加特徴量として使える列がありません。日付列と目的変数以外の列を用意してください。")
+def diagnose_feature_columns(df: pd.DataFrame, date_col: str, target_col: str) -> list[dict]:
+    """手がかり候補の各列を診断し、初期チェック状態と注意書きを決める。
+
+    ID列・自由記述・目的変数のコピー(リーク)は、見かけの精度だけを
+    水増しして解釈を壊すため、既定でチェックを外し理由を添える。
+    """
+    n = len(df)
+    target_numeric = pd.to_numeric(df[target_col], errors="coerce")
+    diagnoses = []
+    for col in df.columns:
+        if col in (date_col, target_col):
+            continue
+        series = df[col]
+        nunique = int(series.nunique(dropna=True))
+        is_num = pd.api.types.is_numeric_dtype(series)
+        default_on = True
+        note = ""
+
+        if n > 0 and nunique >= n * 0.95:
+            default_on = False
+            note = (
+                "ほぼ全行が異なる値です。通し番号やIDの可能性が高く、"
+                "手がかりに入れると見かけの精度だけが良くなるため外してあります。"
+            )
+        elif not is_num and nunique > 50:
+            default_on = False
+            note = (
+                f"種類が{nunique}もある文字列です。品番や自由記述の可能性が高く、"
+                "パターンとして学習しにくいため外してあります。"
+            )
+        elif is_num:
+            corr = target_numeric.corr(pd.to_numeric(series, errors="coerce"))
+            if pd.notna(corr) and abs(float(corr)) > 0.98:
+                default_on = False
+                note = (
+                    "予測したい数量とほぼ同じ動きをしています。数量のコピーや"
+                    "派生列(リーク)の疑いがあるため外してあります。"
+                )
+
+        diagnoses.append({"col": col, "default_on": default_on, "note": note})
+    return diagnoses
+
+
+def explain_generic_importance(importance_df: pd.DataFrame, target_col: str) -> list[str]:
+    """手がかりの効き具合を、断定しすぎない日本語にする(要因分析モード用)。"""
+    total = float(importance_df["重要度"].sum())
+    if total <= 0:
+        return []
+    lines = []
+    for _, row in importance_df.head(3).iterrows():
+        share = float(row["重要度"]) / total * 100
+        if share < 10:
+            continue
+        lines.append(
+            f"「{row['特徴量']}」が予測の約{share:.0f}%を担っています。"
+            f"{row['特徴量']}によって{target_col}の水準が変わっている可能性があります。"
+        )
+    return lines
+
+
+def build_additional_feature_model(
+    df: pd.DataFrame,
+    date_col: str,
+    target_col: str,
+    feature_cols: list[str] | None = None,
+):
+    if feature_cols is None:
+        feature_cols = [col for col in df.columns if col not in [date_col, target_col]]
+    if len(feature_cols) == 0:
+        raise ValueError("手がかりに使える列がありません。日付列と予測したい数量以外の列を用意してください。")
 
     model_df = df.copy()
-    selected_features = []
-    for col in candidate_features:
+
+    # 時系列分割の前提として、必ず日付順に並べ替える。
+    # CSVの並び順のまま分割すると「未来のデータで学習して過去を当てる」ことが起こり得る
+    model_df[date_col] = pd.to_datetime(model_df[date_col], errors="coerce")
+    model_df = model_df.dropna(subset=[date_col]).sort_values(date_col).reset_index(drop=True)
+
+    model_df[target_col] = pd.to_numeric(model_df[target_col], errors="coerce")
+
+    numeric_features = []
+    for col in feature_cols:
         # pandas 3.x では文字列列の dtype が object ではなく str になるため、
         # 「数値かどうか」で判定する(dtype=="object" 判定だとテキスト列が全てNaN化して全行消える)
         if pd.api.types.is_numeric_dtype(model_df[col]):
             model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+            numeric_features.append(col)
         else:
-            model_df[col] = model_df[col].astype("category").cat.codes
-        selected_features.append(col)
+            # cat.codes で擬似的な大小関係を作らず、LightGBMのカテゴリ型としてそのまま渡す
+            model_df[col] = model_df[col].astype("category")
 
-    model_df = model_df.dropna(subset=selected_features + [target_col]).copy()
+    selected_features = list(feature_cols)
+
+    # 欠損で行を落とすのは数値の手がかりと目的変数のみ。カテゴリ列の欠損はLightGBMが欠損として扱える
+    model_df = model_df.dropna(subset=numeric_features + [target_col]).copy()
     if len(model_df) < 20:
-        raise ValueError("追加特徴量での予測には、少なくとも 20 行以上の有効データが必要です。")
+        raise ValueError("要因分析には、少なくとも 20 行以上の有効データが必要です。")
 
     split_idx = int(len(model_df) * 0.8)
     if split_idx <= 0 or split_idx >= len(model_df):
@@ -1330,8 +1410,33 @@ else:
         "このモードは未来の予測ではなく、要因の効き具合を見るためのものです。"
     )
 
+    st.markdown("**使う手がかりを選んでください**")
+    st.caption(
+        "通し番号・自由記述・数量のコピーとみられる列は、結果を歪めるため理由を添えて最初からチェックを外してあります。"
+    )
+    feature_diagnoses = diagnose_feature_columns(df, date_col, target_col)
+    selected_features = []
+    for diag in feature_diagnoses:
+        checked = st.checkbox(diag["col"], value=diag["default_on"], key=f"feature_{diag['col']}")
+        if diag["note"]:
+            st.caption(f"⚠️ {diag['note']}")
+        if checked:
+            selected_features.append(diag["col"])
+
+    if len(selected_features) == 0:
+        st.info("手がかりを1つ以上選んでください。")
+        st.stop()
+
+    if len(selected_features) > MAX_FEATURE_COLS:
+        st.warning(
+            f"一度に見る手がかりは {MAX_FEATURE_COLS} 個までにしています。"
+            "多すぎると「どれが効いているか」が読み取れなくなるためです。"
+            "業務の実感で効いていそうな列に絞ってみてください。"
+        )
+        st.stop()
+
     try:
-        result = build_additional_feature_model(df, date_col, target_col)
+        result = build_additional_feature_model(df, date_col, target_col, selected_features)
     except Exception as exc:
         show_user_error(f"要因分析の実行で問題が発生しました。{exc}")
         st.stop()
@@ -1350,6 +1455,13 @@ else:
         plt.xticks(rotation=45)
         plt.tight_layout()
         st.pyplot(fig6)
+
+        explain_lines = explain_generic_importance(result["importance_df"], target_col)
+        if explain_lines:
+            st.markdown("**読み取れること（参考）**")
+            for line in explain_lines:
+                st.markdown(f"・{line}")
+            st.caption("※統計的な傾向にもとづく参考情報であり、因果関係を示すものではありません。")
 
     with st.expander("精度の詳しい数字を見る（単純な方法との比較・テスト期間の答え合わせ）"):
         render_accuracy_summary(
