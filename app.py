@@ -50,20 +50,18 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_ROWS = 5000
 MAX_COLS = 20
 
-# アプリ内から1クリックで試せるサンプルデータ(いずれも合成データ)。モードに応じて切り替える
+# アプリ内から1クリックで試せるサンプルデータ(いずれも合成データ)
 _SAMPLE_DIR = Path(__file__).parent / "sample_data"
 SAMPLE_FILES = {
-    "時系列予測": {
+    "ts": {
         "path": _SAMPLE_DIR / "sample_orders_daily.csv",
-        "button": "サンプルデータで試す（ある会社の日次受注件数・1年半分）",
         "loaded": (
             "サンプルデータ（ある会社の日次受注件数・546日分の合成データ）を読み込みました。"
             "そのまま下の「予測する」ボタンまで進めます。自社のCSVをアップロードすると置き換わります。"
         ),
     },
-    "追加特徴量で予測": {
+    "bento": {
         "path": _SAMPLE_DIR / "sample_bento_daily.csv",
-        "button": "サンプルデータで試す（お弁当屋さんの日次販売データ）",
         "loaded": (
             "サンプルデータ（お弁当屋さんの平日販売データ・約9か月分の合成データ）を読み込みました。"
             "メニュー・天気・曜日などの手がかりから、何が販売数を動かしているかを見られます。"
@@ -217,6 +215,8 @@ if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 if "use_sample" not in st.session_state:
     st.session_state["use_sample"] = False
+if "sample_kind" not in st.session_state:
+    st.session_state["sample_kind"] = "ts"
 
 
 def show_user_error(message: str) -> None:
@@ -438,12 +438,13 @@ def render_accuracy_summary(
     st.subheader("精度評価（実務視点）")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("MAE", f"{mae:.2f}")
-    c2.metric("RMSE", f"{rmse:.2f}")
-    c3.metric("MAPE", "判定不可" if mape is None else f"{mape:.1f}%")
+    c1.metric("平均して何%ズレるか（MAPE）", "判定不可" if mape is None else f"±{mape:.1f}%")
+    c2.metric("平均誤差（MAE）", f"{mae:.2f}")
+    c3.metric("大きな外しの重み（RMSE）", f"{rmse:.2f}")
 
     st.caption(
-        "MAEは平均的な誤差、RMSEは大きな誤差をより重く見る指標、MAPEは平均して何％ズレたかを見る指標です。"
+        "まずは左のMAPE（±何%）を見てください。MAEは実際の数量単位での平均誤差、"
+        "RMSEは大きく外した回をより重く数えた指標です。"
     )
 
     if mape is None:
@@ -1060,16 +1061,12 @@ with col2:
     if st.button("最初からやり直す"):
         st.session_state["uploader_key"] += 1
         st.session_state["use_sample"] = False
+        st.session_state["sample_kind"] = "ts"
         st.rerun()
 
 st.info(
-    "CSVの日付列と数量列を選ぶだけで予測できます。粒度(日次/週次/月次)は自動判定します。アップロードされたデータは保存しません。"
-)
-
-mode = st.radio(
-    "使い方を選んでください",
-    ["時系列予測", "追加特徴量で予測"],
-    horizontal=True,
+    "CSVの日付列と数量列を選ぶだけで予測できます。粒度(日次/週次/月次)は自動判定します。"
+    "アップロードされたデータは保存しません。その場の計算にだけ使い、画面を閉じれば消えます。"
 )
 
 uploaded_file = st.file_uploader(
@@ -1079,15 +1076,19 @@ uploaded_file = st.file_uploader(
 )
 
 
-# モードに応じたサンプル(時系列=受注データ/追加特徴量=お弁当データ)。
-# サンプル利用中にモードを切り替えた場合も、rerunでそのモード用のサンプルに入れ替わる
-sample_cfg = SAMPLE_FILES.get(mode) or SAMPLE_FILES["時系列予測"]
-
 if uploaded_file is None and not st.session_state["use_sample"]:
     st.info("まずはCSVファイルをアップロードしてください。手元にデータがなくても、下のボタンからサンプルで試せます。")
-    if st.button(sample_cfg["button"], type="primary"):
-        st.session_state["use_sample"] = True
-        st.rerun()
+    sample_b1, sample_b2 = st.columns(2)
+    with sample_b1:
+        if st.button("受注データのサンプルで試す（日次・1年半分）", type="primary", use_container_width=True):
+            st.session_state["use_sample"] = True
+            st.session_state["sample_kind"] = "ts"
+            st.rerun()
+    with sample_b2:
+        if st.button("お弁当屋さんのサンプルで試す（要因分析向け）", use_container_width=True):
+            st.session_state["use_sample"] = True
+            st.session_state["sample_kind"] = "bento"
+            st.rerun()
     st.stop()
 
 
@@ -1101,6 +1102,7 @@ if uploaded_file is not None:
         show_user_error(str(exc))
         st.stop()
 else:
+    sample_cfg = SAMPLE_FILES.get(st.session_state.get("sample_kind") or "ts", SAMPLE_FILES["ts"])
     try:
         df = pd.read_csv(sample_cfg["path"], encoding="utf-8-sig")
     except Exception:
@@ -1126,8 +1128,26 @@ st.dataframe(df, use_container_width=True)
 
 all_columns = df.columns.tolist()
 if len(all_columns) < 2:
-    show_user_error("少なくとも日付列と目的変数列の 2 列が必要です。")
+    show_user_error("少なくとも日付列と、予測したい数量の列の 2 列が必要です。")
     st.stop()
+
+# データを見てから使い方を決める。2列(日付+数量)なら迷いようがないので時系列予測に直行する
+if len(all_columns) == 2:
+    mode = "時系列予測"
+else:
+    default_mode_idx = (
+        1 if (st.session_state["use_sample"] and st.session_state.get("sample_kind") == "bento") else 0
+    )
+    mode_label = st.radio(
+        "使い方を選んでください",
+        [
+            "日付と数量だけで予測する（時系列予測）",
+            "他の列も使って、何が数字を動かしているかを見る（要因分析）",
+        ],
+        horizontal=True,
+        index=default_mode_idx,
+    )
+    mode = "時系列予測" if (mode_label or "").startswith("日付と数量") else "追加特徴量で予測"
 
 st.subheader("設定")
 setting_col1, setting_col2, setting_col3 = st.columns(3)
@@ -1223,53 +1243,13 @@ if mode == "時系列予測":
                 result["baseline_metrics"], result["future_df"], latest_actual, recent_label
             )
 
-            render_accuracy_summary(
-                result["mae"],
-                result["rmse"],
-                result["mape"],
-                result["future_df"],
-                result["baseline_metrics"],
-            )
-
-            st.subheader("テストデータでの予測結果")
-            st.dataframe(result["compare_df"], use_container_width=True)
-
-            fig2, ax2 = plt.subplots(figsize=(10, 4))
-            ax2.plot(result["compare_df"]["日付"], result["compare_df"]["実績"], marker="o", label="実績")
-            ax2.plot(result["compare_df"]["日付"], result["compare_df"]["予測"], marker="o", linestyle="--", label="予測")
-            ax2.set_xlabel("日付")
-            ax2.set_ylabel(target_col)
-            ax2.set_title("実績と予測の比較")
-            ax2.legend()
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            st.pyplot(fig2)
-
-            st.subheader("どの手がかりが効いているか")
-            if float(result["importance_df"]["重要度"].sum()) == 0:
-                render_importance_diagnosis(result["importance_df"])
-            else:
-                display_importance = result["importance_df"].rename(columns={"特徴量": "手がかり"})
-                st.dataframe(display_importance, use_container_width=True)
-
-                fig3, ax3 = plt.subplots(figsize=(8, 4))
-                ax3.bar(display_importance["手がかり"], display_importance["重要度"])
-                ax3.set_ylabel("重要度")
-                ax3.set_title("手がかりの効き具合")
-                plt.xticks(rotation=45)
-                plt.tight_layout()
-                st.pyplot(fig3)
-
+            # 見通し(本編): サマリー → 未来予測グラフ → 補足コメント → ダウンロード
             forecast_summary = generate_forecast_summary(latest_actual, result["future_df"])
             render_forecast_summary(
                 forecast_summary, target_col, result["importance_df"], recent_label
             )
 
-            st.subheader("未来予測")
-            future_df = result["future_df"].copy()
-            future_df = future_df.rename(columns={date_col: "予測日付"})
-            st.dataframe(future_df, use_container_width=True)
-
+            st.subheader("実績と未来予測")
             fig4, ax4 = plt.subplots(figsize=(10, 4))
             ax4.plot(result["ts_df"][date_col], result["ts_df"][target_col], marker="o", label="実績")
             ax4.plot(result["future_df"][date_col], result["future_df"]["予測値"], marker="o", linestyle="--", label="予測")
@@ -1280,6 +1260,10 @@ if mode == "時系列予測":
             plt.xticks(rotation=45)
             plt.tight_layout()
             st.pyplot(fig4)
+
+            future_df = result["future_df"].copy()
+            future_df = future_df.rename(columns={date_col: "予測日付"})
+            st.dataframe(future_df, use_container_width=True)
 
             future_mean = float(result["future_df"]["予測値"].mean())
             st.subheader("補足コメント")
@@ -1295,41 +1279,62 @@ if mode == "時系列予測":
                 mime="text/csv",
             )
 
+            # 詳細は折りたたみに収納(結論・見通し・グラフだけで持ち帰れる構成にする)
+            with st.expander("精度の詳しい数字を見る（単純な方法との比較・テスト期間の答え合わせ）"):
+                render_accuracy_summary(
+                    result["mae"],
+                    result["rmse"],
+                    result["mape"],
+                    result["future_df"],
+                    result["baseline_metrics"],
+                )
+
+                st.markdown("**テスト期間の実績と予測（答え合わせ）**")
+                st.dataframe(result["compare_df"], use_container_width=True)
+
+                fig2, ax2 = plt.subplots(figsize=(10, 4))
+                ax2.plot(result["compare_df"]["日付"], result["compare_df"]["実績"], marker="o", label="実績")
+                ax2.plot(result["compare_df"]["日付"], result["compare_df"]["予測"], marker="o", linestyle="--", label="予測")
+                ax2.set_xlabel("日付")
+                ax2.set_ylabel(target_col)
+                ax2.set_title("実績と予測の比較")
+                ax2.legend()
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                st.pyplot(fig2)
+
+            with st.expander("どの手がかりが効いているか（詳しい数字）"):
+                if float(result["importance_df"]["重要度"].sum()) == 0:
+                    render_importance_diagnosis(result["importance_df"])
+                else:
+                    display_importance = result["importance_df"].rename(columns={"特徴量": "手がかり"})
+                    st.dataframe(display_importance, use_container_width=True)
+
+                    fig3, ax3 = plt.subplots(figsize=(8, 4))
+                    ax3.bar(display_importance["手がかり"], display_importance["重要度"])
+                    ax3.set_ylabel("重要度")
+                    ax3.set_title("手がかりの効き具合")
+                    plt.xticks(rotation=45)
+                    plt.tight_layout()
+                    st.pyplot(fig3)
+
             render_consultation_cta(ai_lost=is_ai_lost(result["baseline_metrics"]))
 
     except Exception as exc:
         show_user_error(f"予測処理で問題が発生しました。{exc}")
 
 else:
-    st.subheader("追加特徴量で予測")
-    st.caption("日付以外の列を手がかりとして使い、過去データの中で予測の精度と、どの手がかりが効いているかを確認します。")
+    st.subheader("要因分析（他の列も使った予測）")
+    st.caption(
+        "日付以外の列を手がかりとして使い、過去データの中で予測の精度と、どの手がかりが効いているかを確認します。"
+        "このモードは未来の予測ではなく、要因の効き具合を見るためのものです。"
+    )
 
     try:
         result = build_additional_feature_model(df, date_col, target_col)
     except Exception as exc:
-        show_user_error(f"追加特徴量モデルの実行で問題が発生しました。{exc}")
+        show_user_error(f"要因分析の実行で問題が発生しました。{exc}")
         st.stop()
-
-    render_accuracy_summary(
-        result["mae"],
-        result["rmse"],
-        result["mape"],
-        baseline_metrics=result["baseline_metrics"],
-    )
-
-    st.subheader("テストデータでの予測結果")
-    st.dataframe(result["compare_df"], use_container_width=True)
-
-    fig5, ax5 = plt.subplots(figsize=(10, 4))
-    ax5.plot(result["compare_df"]["日付"], result["compare_df"]["実績"], marker="o", label="実績")
-    ax5.plot(result["compare_df"]["日付"], result["compare_df"]["予測"], marker="o", linestyle="--", label="予測")
-    ax5.set_xlabel("日付")
-    ax5.set_ylabel(target_col)
-    ax5.set_title("実績と予測の比較")
-    ax5.legend()
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    st.pyplot(fig5)
 
     st.subheader("どの手がかりが効いているか")
     if float(result["importance_df"]["重要度"].sum()) == 0:
@@ -1345,5 +1350,27 @@ else:
         plt.xticks(rotation=45)
         plt.tight_layout()
         st.pyplot(fig6)
+
+    with st.expander("精度の詳しい数字を見る（単純な方法との比較・テスト期間の答え合わせ）"):
+        render_accuracy_summary(
+            result["mae"],
+            result["rmse"],
+            result["mape"],
+            baseline_metrics=result["baseline_metrics"],
+        )
+
+        st.markdown("**テスト期間の実績と予測（答え合わせ）**")
+        st.dataframe(result["compare_df"], use_container_width=True)
+
+        fig5, ax5 = plt.subplots(figsize=(10, 4))
+        ax5.plot(result["compare_df"]["日付"], result["compare_df"]["実績"], marker="o", label="実績")
+        ax5.plot(result["compare_df"]["日付"], result["compare_df"]["予測"], marker="o", linestyle="--", label="予測")
+        ax5.set_xlabel("日付")
+        ax5.set_ylabel(target_col)
+        ax5.set_title("実績と予測の比較")
+        ax5.legend()
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        st.pyplot(fig5)
 
     render_consultation_cta(ai_lost=is_ai_lost(result["baseline_metrics"]))
