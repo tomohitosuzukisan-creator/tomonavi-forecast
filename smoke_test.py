@@ -159,6 +159,19 @@ if r_orders is not None:
           f"→ AI {bm['model_mape']:.1f}% < 直前値 {bm['naive_mape']:.1f}%")
     check("受注データ: 特徴量重要度が出る", r_orders["importance_df"]["重要度"].sum() > 0)
 
+# お弁当サンプル(追加特徴量モード用)の検証
+print("\n[お弁当データ(追加特徴量モード)]")
+bento_df = pd.read_csv(ROOT / "sample_data/sample_bento_daily.csv", encoding="utf-8-sig")
+check("お弁当: 手がかり列がある", len(bento_df.columns) >= 4, f"→ {list(bento_df.columns)}")
+bres = app.build_additional_feature_model(bento_df, "日付", "販売数")
+check("お弁当: MAPE算出", bres["mape"] is not None,
+      f"→ {bres['mape']:.1f}%" if bres["mape"] is not None else "")
+check("お弁当: 手がかりの効き具合が出る", bres["importance_df"]["重要度"].sum() > 0,
+      f"→ 上位: {bres['importance_df'].iloc[0]['特徴量']}")
+bbm = bres["baseline_metrics"]
+check("お弁当: AIが単純平均に勝つ", bbm["model_mape"] < bbm["mean_mape"],
+      f"→ AI {bbm['model_mape']:.1f}% < 平均 {bbm['mean_mape']:.1f}%")
+
 
 # 週次・月次データを合成して検証(引き継ぎ資料で「検証不足」とされていた部分)
 import numpy as np  # noqa: E402

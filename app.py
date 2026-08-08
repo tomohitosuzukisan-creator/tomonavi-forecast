@@ -50,8 +50,27 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_ROWS = 5000
 MAX_COLS = 20
 
-# アプリ内から1クリックで試せるサンプルデータ(ある会社の日次受注件数を模した合成データ)
-SAMPLE_CSV_PATH = Path(__file__).parent / "sample_data" / "sample_orders_daily.csv"
+# アプリ内から1クリックで試せるサンプルデータ(いずれも合成データ)。モードに応じて切り替える
+_SAMPLE_DIR = Path(__file__).parent / "sample_data"
+SAMPLE_FILES = {
+    "時系列予測": {
+        "path": _SAMPLE_DIR / "sample_orders_daily.csv",
+        "button": "サンプルデータで試す（ある会社の日次受注件数・1年半分）",
+        "loaded": (
+            "サンプルデータ（ある会社の日次受注件数・546日分の合成データ）を読み込みました。"
+            "そのまま下の「予測する」ボタンまで進めます。自社のCSVをアップロードすると置き換わります。"
+        ),
+    },
+    "追加特徴量で予測": {
+        "path": _SAMPLE_DIR / "sample_bento_daily.csv",
+        "button": "サンプルデータで試す（お弁当屋さんの日次販売データ）",
+        "loaded": (
+            "サンプルデータ（お弁当屋さんの平日販売データ・約9か月分の合成データ）を読み込みました。"
+            "メニュー・天気・曜日などの手がかりから、何が販売数を動かしているかを見られます。"
+            "自社のCSVをアップロードすると置き換わります。"
+        ),
+    },
+}
 MAX_FORECAST_PERIODS = 14
 CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
 
@@ -969,10 +988,12 @@ def build_additional_feature_model(df: pd.DataFrame, date_col: str, target_col: 
     model_df = df.copy()
     selected_features = []
     for col in candidate_features:
-        if model_df[col].dtype == "object":
-            model_df[col] = model_df[col].astype("category").cat.codes
-        else:
+        # pandas 3.x では文字列列の dtype が object ではなく str になるため、
+        # 「数値かどうか」で判定する(dtype=="object" 判定だとテキスト列が全てNaN化して全行消える)
+        if pd.api.types.is_numeric_dtype(model_df[col]):
             model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+        else:
+            model_df[col] = model_df[col].astype("category").cat.codes
         selected_features.append(col)
 
     model_df = model_df.dropna(subset=selected_features + [target_col]).copy()
@@ -1058,9 +1079,13 @@ uploaded_file = st.file_uploader(
 )
 
 
+# モードに応じたサンプル(時系列=受注データ/追加特徴量=お弁当データ)。
+# サンプル利用中にモードを切り替えた場合も、rerunでそのモード用のサンプルに入れ替わる
+sample_cfg = SAMPLE_FILES.get(mode) or SAMPLE_FILES["時系列予測"]
+
 if uploaded_file is None and not st.session_state["use_sample"]:
     st.info("まずはCSVファイルをアップロードしてください。手元にデータがなくても、下のボタンからサンプルで試せます。")
-    if st.button("サンプルデータで試す（ある会社の日次受注件数・1年半分）", type="primary"):
+    if st.button(sample_cfg["button"], type="primary"):
         st.session_state["use_sample"] = True
         st.rerun()
     st.stop()
@@ -1077,14 +1102,11 @@ if uploaded_file is not None:
         st.stop()
 else:
     try:
-        df = pd.read_csv(SAMPLE_CSV_PATH, encoding="utf-8-sig")
+        df = pd.read_csv(sample_cfg["path"], encoding="utf-8-sig")
     except Exception:
         show_user_error("サンプルデータの読み込みに失敗しました。CSVをアップロードしてお試しください。")
         st.stop()
-    st.success(
-        "サンプルデータ（ある会社の日次受注件数・546日分の合成データ）を読み込みました。"
-        "そのまま下の「予測する」ボタンまで進めます。自社のCSVをアップロードすると置き換わります。"
-    )
+    st.success(sample_cfg["loaded"])
 
 
 if df.empty:
