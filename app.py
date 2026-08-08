@@ -936,6 +936,9 @@ def build_time_series_model(
         max_depth=5,
         random_state=42,
         verbose=-1,
+        # 既定値(20)は中小企業の小規模データに厳しすぎ、月次などで分岐が一度も
+        # 作られず重要度が全ゼロになる。小さな葉を許して解釈可能性を確保する
+        min_child_samples=5,
     )
     model.fit(X_train, y_train)
 
@@ -1099,6 +1102,11 @@ def build_additional_feature_model(
         max_depth=5,
         random_state=42,
         verbose=-1,
+        # 既定値は小規模データに厳しすぎ、カテゴリ列(メニュー等)の分岐が一度も
+        # 作られず「効いていない」ように見えてしまう。小規模・少カテゴリ向けに緩める
+        min_child_samples=5,
+        min_data_per_group=10,
+        cat_smooth=1.0,
     )
     model.fit(X_train, y_train)
 
