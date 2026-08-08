@@ -494,6 +494,19 @@ def render_data_diagnosis(messages: list[dict]) -> None:
             st.info(text)
 
 
+def render_consultation_cta() -> None:
+    """予測結果の後に、30分無料相談への導線を表示する。"""
+    st.divider()
+    st.subheader("この結果、どう使えばいいか迷ったら")
+    st.markdown(
+        "予測は出せても「業務のどこに置くか」「この誤差は許容できるか」の判断は、"
+        "データと会社の実情を知る人にしか下せません。\n\n"
+        "中小製造業のAI活用・需要予測を専門にしている中小企業診断士が、"
+        "30分無料でオンライン相談を承っています。"
+    )
+    st.link_button("30分無料相談を申し込む", "https://tomonavi.com/#contact")
+
+
 def render_importance_diagnosis(importance_df: pd.DataFrame) -> None:
     """特徴量重要度が出ない場合に理由を補足する。"""
     if importance_df.empty or "重要度" not in importance_df.columns:
@@ -1151,6 +1164,8 @@ if mode == "時系列予測":
                 mime="text/csv",
             )
 
+            render_consultation_cta()
+
     except Exception as exc:
         show_user_error(f"予測処理で問題が発生しました。{exc}")
 
@@ -1196,3 +1211,5 @@ else:
     plt.xticks(rotation=45)
     plt.tight_layout()
     st.pyplot(fig6)
+
+    render_consultation_cta()
