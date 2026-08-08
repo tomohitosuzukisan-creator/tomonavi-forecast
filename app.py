@@ -555,7 +555,8 @@ def is_ai_lost(baseline_metrics: dict | None) -> bool:
     naive_mape = bm.get("naive_mape")
     if model_mape is None or mean_mape is None or naive_mape is None:
         return False
-    return model_mape >= min(mean_mape, naive_mape)
+    # numpy の真偽値が漏れないよう、Python の bool に揃えて返す
+    return bool(model_mape >= min(mean_mape, naive_mape))
 
 
 def render_verdict(
