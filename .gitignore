@@ -24,6 +24,9 @@ Thumbs.db
 private_data/
 *_private.csv
 
+# GA4のAPIシークレットなど(Streamlit Cloud側のSecretsで管理する。公開リポジトリにコミットしない)
+.streamlit/secrets.toml
+
 # スモークテストが生成する一時ファイル
 sample_data/_tmp_*.csv
 

@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
+from analytics import track_event
 from core import (
     ACTIVE_JP_FONT,
     CSV_ENCODINGS,
@@ -67,6 +68,10 @@ if "use_sample" not in st.session_state:
     st.session_state["use_sample"] = False
 if "sample_kind" not in st.session_state:
     st.session_state["sample_kind"] = "ts"
+
+if not st.session_state.get("_ga_view_sent"):
+    track_event("app_view")
+    st.session_state["_ga_view_sent"] = True
 
 
 def show_user_error(message: str) -> None:
@@ -353,11 +358,13 @@ if uploaded_file is None and not st.session_state["use_sample"]:
     sample_b1, sample_b2 = st.columns(2)
     with sample_b1:
         if st.button("受注データのサンプルで試す（日次・1年半分）", type="primary", use_container_width=True):
+            track_event("app_sample_click", {"sample_kind": "ts"})
             st.session_state["use_sample"] = True
             st.session_state["sample_kind"] = "ts"
             st.rerun()
     with sample_b2:
         if st.button("お弁当屋さんのサンプルで試す（要因分析向け）", use_container_width=True):
+            track_event("app_sample_click", {"sample_kind": "bento"})
             st.session_state["use_sample"] = True
             st.session_state["sample_kind"] = "bento"
             st.rerun()
@@ -367,6 +374,10 @@ if uploaded_file is None and not st.session_state["use_sample"]:
 if uploaded_file is not None:
     # 実データがアップロードされたら、サンプル表示より優先する
     st.session_state["use_sample"] = False
+    file_key = f"{uploaded_file.name}:{uploaded_file.size}"
+    if st.session_state.get("_ga_last_file") != file_key:
+        track_event("app_file_upload", {"file_size_kb": round(uploaded_file.size / 1024, 1)})
+        st.session_state["_ga_last_file"] = file_key
     try:
         validate_uploaded_file(uploaded_file)
         df = read_csv_with_fallbacks(uploaded_file)
@@ -504,6 +515,10 @@ if mode == "時系列予測":
                 granularity=detected_granularity,
                 forecast_periods=forecast_periods,
             )
+            track_event(
+                "app_forecast_run",
+                {"mode": "time_series", "granularity": detected_granularity, "rows": len(df_time)},
+            )
 
             # 結論ファースト: 最初に「AIで予測する価値があるか」を一言で示す。
             # 比較基準は最終1点でなく直近1周期の平均(曜日・月末変動に振り回されないため)
@@ -629,6 +644,10 @@ else:
 
     try:
         result = build_additional_feature_model(df, date_col, target_col, selected_features)
+        track_event(
+            "app_forecast_run",
+            {"mode": "factor_analysis", "n_features": len(selected_features), "rows": len(df)},
+        )
     except Exception as exc:
         show_user_error(f"要因分析の実行で問題が発生しました。{exc}")
         st.stop()
