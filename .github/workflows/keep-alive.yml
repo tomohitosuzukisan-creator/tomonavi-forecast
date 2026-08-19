@@ -1,0 +1,35 @@
+# Streamlit Community Cloud は12時間アクセスがないとアプリを休止する。
+# 休止中は訪問者に「Yes, get this app back up!」の画面が出て、起動まで20〜30秒待たされる。
+# note記事からの読者を入口で取りこぼさないよう、4時間おきに実際のブラウザで訪問して起こしておく。
+#
+# 重要: 単純なHTTPリクエスト(curl等)では起こせない。Streamlitは
+# JS実行 → WebSocket接続(/_stcore/stream) で初めてPythonプロセスが起動するため、
+# ヘッドレスブラウザで実際にページを開き、必要なら復帰ボタンを押す必要がある。
+name: keep-alive
+
+on:
+  schedule:
+    # 4時間おき(1日6回)。休止は12時間なので、1〜2回失敗しても間に合う余裕をとっている
+    - cron: "0 */4 * * *"
+  workflow_dispatch: # 手動実行用
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Visit app and wake it if sleeping
+        run: python .github/scripts/keep_alive.py
+        env:
+          APP_URL: https://tomonavi-forecast.streamlit.app/
