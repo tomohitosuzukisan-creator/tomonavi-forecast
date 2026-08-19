@@ -96,4 +96,24 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # 例外で落ちると GitHub Actions には「exit code 1」としか残らず、原因が追えない。
+    # 実行環境の情報と併せて記録してから終了する
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        import platform
+        import traceback
+
+        log("=== 想定外のエラーで終了 ===", error=True)
+        log(f"python: {sys.version}", error=True)
+        log(f"platform: {platform.platform()}", error=True)
+        try:
+            import playwright
+
+            log(f"playwright: {playwright.__version__}", error=True)
+        except Exception:
+            log("playwright: バージョンを取得できず", error=True)
+        log(traceback.format_exc(), error=True)
+        raise SystemExit(1)
