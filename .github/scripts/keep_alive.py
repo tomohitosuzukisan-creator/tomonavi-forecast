@@ -31,6 +31,15 @@ WAKE_READY_WAIT_MS = 180_000
 AWAKE_READY_WAIT_MS = 60_000
 
 
+def log(message: str, *, error: bool = False) -> None:
+    """進捗を即時に出す。
+
+    CI ではログがパイプに流れるため既定では出力が溜め込まれ、途中で打ち切られた際に
+    どこまで進んだか分からなくなる。原因を追えるよう1行ずつ吐き出す。
+    """
+    print(message, file=sys.stderr if error else sys.stdout, flush=True)
+
+
 def main() -> int:
     # ローカル(Windows)実行でも日本語ログが化けないようにする
     for stream in (sys.stdout, sys.stderr):
@@ -40,44 +49,49 @@ def main() -> int:
             pass
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        # 公式Playwrightイメージは root で動くため、サンドボックスを切らないと
+        # Chromium が起動できない
+        browser = p.chromium.launch(args=["--no-sandbox"])
         page = browser.new_page()
-        print(f"訪問: {APP_URL}")
+        log(f"訪問: {APP_URL}")
         page.goto(APP_URL, wait_until="domcontentloaded", timeout=60_000)
+        log("ページ読み込み完了。復帰ボタンの有無を確認する")
 
         # 休止中なら復帰ボタンを押す。起きていればボタンは現れないのでタイムアウトで抜ける
         button = page.get_by_text(WAKE_BUTTON_TEXT, exact=False).first
         try:
             button.wait_for(state="visible", timeout=BUTTON_WAIT_MS)
-            print("休止中だったので復帰ボタンを押す")
+            log("休止中だったので復帰ボタンを押す")
             button.click()
             was_asleep = True
         except PlaywrightTimeoutError:
-            print("復帰ボタンは出なかった(すでに起動中とみられる)")
+            log("復帰ボタンは出なかった(すでに起動中とみられる)")
             was_asleep = False
 
         # 起動を確認する。待つ長さと、確認できなかったときの扱いは状況で変える
         timeout_ms = WAKE_READY_WAIT_MS if was_asleep else AWAKE_READY_WAIT_MS
+        log(f"起動確認を待つ(最大 {timeout_ms // 1000} 秒)")
         try:
             page.wait_for_function(
                 "marker => document.title.includes(marker)",
                 arg=READY_MARKER,
                 timeout=timeout_ms,
             )
-            print(f"起動を確認: タイトルが {page.title()!r} になった")
+            log(f"起動を確認: タイトルが {page.title()!r} になった")
             status = 0
         except PlaywrightTimeoutError:
             if was_asleep:
                 # 復帰要求はサーバ側に届いており、ブラウザを閉じても起動は続く。
                 # 起動が遅いだけのことが多いので、警告に留めて成功扱いにする
-                print("復帰は要求済み。起動確認は時間内に取れなかった(処理は継続中とみられる)")
+                log("復帰は要求済み。起動確認は時間内に取れなかった(処理は継続中とみられる)")
                 status = 0
             else:
                 # 起きているはずなのに表示されない=異常。気づけるように失敗で返す
-                print("起動中のはずが画面を確認できなかった", file=sys.stderr)
+                log("起動中のはずが画面を確認できなかった", error=True)
                 status = 1
 
         browser.close()
+        log(f"終了(status={status})")
         return status
 
 
