@@ -6,16 +6,15 @@
 # JS実行 → WebSocket接続(/_stcore/stream) で初めてPythonプロセスが起動するため、
 # ヘッドレスブラウザで実際にページを開き、必要なら復帰ボタンを押す必要がある。
 #
-# ブラウザは公式のPlaywrightイメージに同梱されているものを使う。
-# 以前は毎回 `playwright install --with-deps` で導入していたが、この工程が
-# 20分の上限に達しても終わらず実行が打ち切られたため、導入自体をなくした。
+# ブラウザは公式Playwrightイメージ同梱のものを使う。以前は毎回
+# `playwright install --with-deps` で導入していたが、この工程が20分の上限に
+# 達しても終わらず打ち切られたため、導入自体をなくした。
 name: keep-alive
 
 on:
-  # 定期実行は一時停止中(2026-08-19)。
-  # コンテナ化で滞留は解消したが、スクリプトが exit 1 で終わる原因が未特定。
-  # そのままにすると失敗通知メールが4時間おきに届き続けるため、原因を特定するまで止める。
-  # 復旧手順: 下のコメントを外すだけ。手動実行(workflow_dispatch)は今も使える。
+  # 定期実行は一時停止中。ModuleNotFoundError の修正が正しいか、手動実行で
+  # 1回成功を確認してから再開する(失敗通知メールを何度も飛ばさないため)。
+  # 復旧手順: 下2行のコメントを外すだけ。
   # schedule:
   #   - cron: "0 */4 * * *"  # 4時間おき(1日6回)。休止は12時間なので余裕がある
   workflow_dispatch: # 手動実行用
@@ -24,15 +23,22 @@ jobs:
   wake:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # ブラウザと依存パッケージが導入済みの公式イメージ。導入を待つ必要がない
+    # ブラウザ本体とOS依存パッケージが導入済みの公式イメージ
     container:
       image: mcr.microsoft.com/playwright/python:v1.62.0-noble
     steps:
       - uses: actions/checkout@v4
 
+      # イメージにブラウザは入っているが、`python` から playwright ライブラリを
+      # import できず ModuleNotFoundError で落ちた(2026-08-19)。
+      # インタプリタを python3 に固定し、無ければ入れる。
+      # ブラウザは PLAYWRIGHT_BROWSERS_PATH 配下に既にあるため再ダウンロードは起きず、数秒で終わる
+      - name: Ensure playwright package
+        run: python3 -m pip install --break-system-packages --no-cache-dir playwright==1.62.0
+
       - name: Visit app and wake it if sleeping
         # 想定は3分以内。超えたらどの工程で滞留したか切り分けられるよう区切っておく
         timeout-minutes: 8
-        run: python .github/scripts/keep_alive.py
+        run: python3 .github/scripts/keep_alive.py
         env:
           APP_URL: https://tomonavi-forecast.streamlit.app/
