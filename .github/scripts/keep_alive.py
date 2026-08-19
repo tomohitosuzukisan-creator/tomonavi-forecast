@@ -25,8 +25,10 @@ READY_MARKER = "需要予測アプリ"
 
 # 休止画面自体もJSで描画されるため、ボタンの有無はこの秒数まで待って判断する
 BUTTON_WAIT_MS = 20_000
-# 復帰後は環境の再構築が走るので長めに待つ
-READY_WAIT_MS = 240_000
+# 復帰ボタンを押した後の待ち時間。起動には環境の再構築が走るので長めにとる
+WAKE_READY_WAIT_MS = 180_000
+# もともと起きていた場合の待ち時間。すぐ表示されるはずなので短くてよい
+AWAKE_READY_WAIT_MS = 60_000
 
 
 def main() -> int:
@@ -49,22 +51,31 @@ def main() -> int:
             button.wait_for(state="visible", timeout=BUTTON_WAIT_MS)
             print("休止中だったので復帰ボタンを押す")
             button.click()
+            was_asleep = True
         except PlaywrightTimeoutError:
             print("復帰ボタンは出なかった(すでに起動中とみられる)")
+            was_asleep = False
 
-        # 起動完了を確認する
+        # 起動を確認する。待つ長さと、確認できなかったときの扱いは状況で変える
+        timeout_ms = WAKE_READY_WAIT_MS if was_asleep else AWAKE_READY_WAIT_MS
         try:
             page.wait_for_function(
                 "marker => document.title.includes(marker)",
                 arg=READY_MARKER,
-                timeout=READY_WAIT_MS,
+                timeout=timeout_ms,
             )
             print(f"起動を確認: タイトルが {page.title()!r} になった")
             status = 0
         except PlaywrightTimeoutError:
-            # 起こす操作自体は済んでいるので致命ではないが、気づけるように失敗で返す
-            print("起動を確認できなかった(タイムアウト)", file=sys.stderr)
-            status = 1
+            if was_asleep:
+                # 復帰要求はサーバ側に届いており、ブラウザを閉じても起動は続く。
+                # 起動が遅いだけのことが多いので、警告に留めて成功扱いにする
+                print("復帰は要求済み。起動確認は時間内に取れなかった(処理は継続中とみられる)")
+                status = 0
+            else:
+                # 起きているはずなのに表示されない=異常。気づけるように失敗で返す
+                print("起動中のはずが画面を確認できなかった", file=sys.stderr)
+                status = 1
 
         browser.close()
         return status

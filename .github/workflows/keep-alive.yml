@@ -16,7 +16,9 @@ on:
 jobs:
   wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Playwrightのブラウザ依存パッケージ(apt)の導入に数分かかるため、余裕をとる。
+    # 公開リポジトリなので実行時間の課金はなく、長めでも損はしない
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
