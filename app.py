@@ -69,10 +69,41 @@ if "use_sample" not in st.session_state:
 if "sample_kind" not in st.session_state:
     st.session_state["sample_kind"] = "ts"
 
-# 一時的な診断(2026-08-21)。ボット判定が効かない原因を切り分けるため、
-# ?diag=1 のときだけ判定材料を出す。原因特定後に削除する
+
+def _visit_is_bot() -> bool:
+    """人間の利用ではないアクセスかどうか。
+
+    休止対策(.github/workflows/keep-alive.yml)が1日6回訪問する。これを数えると
+    実際の利用者がボットに埋もれるため、計測から外す。
+
+    判定をこの app.py 側に置いているのは、analytics.py に置いた実装が
+    サーバー上で反映されず(AttributeErrorで確認)、抑止が効かなかったため。
+    """
+    try:
+        if str(st.query_params.get("keepalive", "")) == "1":
+            return True
+    except Exception:
+        pass
+
+    try:
+        user_agent = st.context.headers.get("User-Agent", "")
+    except Exception:
+        return False
+
+    return any(m in user_agent for m in ("HeadlessChrome", "Headless", "bot", "Bot"))
+
+
+def track(name: str, params: dict | None = None) -> None:
+    """計測を1件送る。ボットのアクセスは送らない。"""
+    if _visit_is_bot():
+        return
+    track_event(name, params)
+
+
+# 一時的な診断(2026-08-21)。反映されない原因を切り分けるため ?diag=1 のときだけ出す。
+# 原因特定後に削除する
 if str(st.query_params.get("diag", "")) == "1":
-    import analytics as _diag_analytics
+    import analytics as _diag
 
     _ua = "(取得不可)"
     try:
@@ -81,14 +112,17 @@ if str(st.query_params.get("diag", "")) == "1":
         _ua = f"(例外: {type(_exc).__name__})"
     st.code(
         "DIAG_START\n"
-        f"is_bot={_diag_analytics._is_bot_visit()}\n"
+        f"app_is_bot={_visit_is_bot()}\n"
         f"query_params={dict(st.query_params)}\n"
         f"ua={_ua}\n"
+        f"analytics_file={getattr(_diag, '__file__', '(不明)')}\n"
+        f"analytics_has_is_bot_visit={hasattr(_diag, '_is_bot_visit')}\n"
+        f"analytics_members={[m for m in dir(_diag) if not m.startswith('__')]}\n"
         "DIAG_END"
     )
 
 if not st.session_state.get("_ga_view_sent"):
-    track_event("app_view")
+    track("app_view")
     st.session_state["_ga_view_sent"] = True
 
 
@@ -383,13 +417,13 @@ if uploaded_file is None and not st.session_state["use_sample"]:
     sample_b1, sample_b2 = st.columns(2)
     with sample_b1:
         if st.button("受注データのサンプルで試す（日次・1年半分）", type="primary", use_container_width=True):
-            track_event("app_sample_click", {"sample_kind": "ts"})
+            track("app_sample_click", {"sample_kind": "ts"})
             st.session_state["use_sample"] = True
             st.session_state["sample_kind"] = "ts"
             st.rerun()
     with sample_b2:
         if st.button("お弁当屋さんのサンプルで試す（要因分析向け）", use_container_width=True):
-            track_event("app_sample_click", {"sample_kind": "bento"})
+            track("app_sample_click", {"sample_kind": "bento"})
             st.session_state["use_sample"] = True
             st.session_state["sample_kind"] = "bento"
             st.rerun()
@@ -401,7 +435,7 @@ if uploaded_file is not None:
     st.session_state["use_sample"] = False
     file_key = f"{uploaded_file.name}:{uploaded_file.size}"
     if st.session_state.get("_ga_last_file") != file_key:
-        track_event("app_file_upload", {"file_size_kb": round(uploaded_file.size / 1024, 1)})
+        track("app_file_upload", {"file_size_kb": round(uploaded_file.size / 1024, 1)})
         st.session_state["_ga_last_file"] = file_key
     try:
         validate_uploaded_file(uploaded_file)
@@ -540,7 +574,7 @@ if mode == "時系列予測":
                 granularity=detected_granularity,
                 forecast_periods=forecast_periods,
             )
-            track_event(
+            track(
                 "app_forecast_run",
                 {"mode": "time_series", "granularity": detected_granularity, "rows": len(df_time)},
             )
@@ -669,7 +703,7 @@ else:
 
     try:
         result = build_additional_feature_model(df, date_col, target_col, selected_features)
-        track_event(
+        track(
             "app_forecast_run",
             {"mode": "factor_analysis", "n_features": len(selected_features), "rows": len(df)},
         )
