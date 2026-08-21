@@ -22,8 +22,24 @@ def _get_client_id() -> str:
     return st.session_state["_ga_client_id"]
 
 
+def _is_keepalive_visit() -> bool:
+    """休止対策の自動アクセスかどうか。
+
+    アプリを起こしておくため .github/workflows/keep-alive.yml が1日6回訪問する。
+    これを数えてしまうと、本来知りたい「実際に使った人」がボットに埋もれるため、
+    自動アクセス側が付ける目印(?keepalive=1)を見て計測から外す。
+    """
+    try:
+        return st.query_params.get("keepalive") == "1"
+    except Exception:
+        return False
+
+
 def track_event(name: str, params: dict | None = None) -> None:
     """GA4にイベントを1件送信する。失敗してもアプリの動作は止めない。"""
+    if _is_keepalive_visit():
+        return
+
     try:
         measurement_id = st.secrets["ga"]["measurement_id"]
         api_secret = st.secrets["ga"]["api_secret"]

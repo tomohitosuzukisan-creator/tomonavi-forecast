@@ -39,4 +39,7 @@ jobs:
         timeout-minutes: 8
         run: python3 .github/scripts/keep_alive.py
         env:
-          APP_URL: https://tomonavi-forecast.streamlit.app/
+          # ?keepalive=1 は自動アクセスの目印。アプリ側(analytics.py)がこれを見て
+          # GA4への計測を止める。付けないとこの訪問が1日6件の利用者として数えられ、
+          # 実際の利用状況が読めなくなる
+          APP_URL: https://tomonavi-forecast.streamlit.app/?keepalive=1

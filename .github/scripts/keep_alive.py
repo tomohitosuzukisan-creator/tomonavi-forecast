@@ -13,7 +13,9 @@ import sys
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-APP_URL = os.environ.get("APP_URL", "https://tomonavi-forecast.streamlit.app/")
+# ?keepalive=1 はこのアクセスが自動巡回であることの目印。アプリ側がこれを見て
+# GA4への計測を止める(付けないと1日6件の「利用者」として数えられてしまう)
+APP_URL = os.environ.get("APP_URL", "https://tomonavi-forecast.streamlit.app/?keepalive=1")
 
 # 休止中に出る復帰ボタン。「Yes, get this app back up!」の部分一致で拾う
 WAKE_BUTTON_TEXT = "get this app back up"
