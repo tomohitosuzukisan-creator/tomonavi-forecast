@@ -100,27 +100,6 @@ def track(name: str, params: dict | None = None) -> None:
     track_event(name, params)
 
 
-# 一時的な診断(2026-08-21)。反映されない原因を切り分けるため ?diag=1 のときだけ出す。
-# 原因特定後に削除する
-if str(st.query_params.get("diag", "")) == "1":
-    import analytics as _diag
-
-    _ua = "(取得不可)"
-    try:
-        _ua = st.context.headers.get("User-Agent", "(ヘッダなし)")
-    except Exception as _exc:
-        _ua = f"(例外: {type(_exc).__name__})"
-    st.code(
-        "DIAG_START\n"
-        f"app_is_bot={_visit_is_bot()}\n"
-        f"query_params={dict(st.query_params)}\n"
-        f"ua={_ua}\n"
-        f"analytics_file={getattr(_diag, '__file__', '(不明)')}\n"
-        f"analytics_has_is_bot_visit={hasattr(_diag, '_is_bot_visit')}\n"
-        f"analytics_members={[m for m in dir(_diag) if not m.startswith('__')]}\n"
-        "DIAG_END"
-    )
-
 if not st.session_state.get("_ga_view_sent"):
     track("app_view")
     st.session_state["_ga_view_sent"] = True
